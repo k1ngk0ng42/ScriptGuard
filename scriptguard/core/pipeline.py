@@ -1,3 +1,5 @@
+# scriptguard/core/pipeline.py
+
 from scriptguard.core.detector import detect_script
 from scriptguard.core.deobfuscator.engine import DeobfuscationEngine
 from scriptguard.core.ioc.extract import extract_ioc
@@ -9,13 +11,11 @@ def analyze(path, output, report_format="json", verbose=False):
     if verbose:
         print(f"[INFO] Reading file: {path}")
 
-    try:
-        with open(path, "rb") as f:
-            raw = f.read()
-    except Exception as e:
-        raise RuntimeError(f"Failed to read input file: {e}")
+    with open(path, "rb") as f:
+        raw = f.read()
 
-    script_type, text = detect_script(raw)
+    # FIX: теперь 3 значения
+    script_type, text, detect_confidence = detect_script(raw)
 
     if verbose:
         print(f"[INFO] Script type detected: {script_type}")
@@ -26,7 +26,10 @@ def analyze(path, output, report_format="json", verbose=False):
 
     code = result.get("code", "")
     iterations = result.get("iterations", 0)
-    confidence = result.get("confidence", 0.0)
+    engine_confidence = result.get("confidence", 0.0)
+
+    # итоговая уверенность
+    confidence = round((detect_confidence + engine_confidence) / 2, 2)
 
     if verbose:
         print("[INFO] Extracting indicators of compromise")
@@ -39,7 +42,11 @@ def analyze(path, output, report_format="json", verbose=False):
         "type": script_type,
         "iterations": iterations,
         "confidence": confidence,
-        "ioc": ioc,
+        "ips": ioc.get("ips"),
+        "urls": ioc.get("urls"),
+        "domains": ioc.get("domains"),
+        "emails": ioc.get("emails"),
+        "hashes": ioc.get("hashes"),
         "mitre": mitre,
         "deobfuscated_code": code[:8000],
     }
@@ -48,3 +55,4 @@ def analyze(path, output, report_format="json", verbose=False):
         print(f"[INFO] Writing report: {output}")
 
     render_report(report, output, report_format)
+    return report
