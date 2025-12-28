@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
-from typing import Callable, List, Set
 import math
+from dataclasses import dataclass, field
+from typing import Callable, List, Set, Union
 
 from scriptguard.core.deobfuscator.base64_codec import decode_base64
 from scriptguard.core.deobfuscator.rot_codec import decode_rot
@@ -9,7 +9,7 @@ from scriptguard.core.deobfuscator.vba_chr import decode_vba_chr
 from scriptguard.core.deobfuscator.xor_codec import decode_xor
 
 
-DECODERS: List[Callable[[str], str]] = [
+DECODERS: List[Callable[[str], Union[str, List[str]]]] = [
     decode_powershell,
     decode_vba_chr,
     decode_base64,
@@ -28,8 +28,7 @@ def entropy(s: str) -> float:
 def printable_ratio(s: str) -> float:
     if not s:
         return 0.0
-    printable = sum(c.isprintable() for c in s)
-    return printable / len(s)
+    return sum(c.isprintable() for c in s) / len(s)
 
 
 @dataclass(order=True)
@@ -48,7 +47,6 @@ class DeobfuscationEngine:
     def _score(self, text: str) -> float:
         """
         Composite heuristic score.
-        Чем выше — тем больше похоже на финальный payload.
         """
         e = entropy(text)
         p = printable_ratio(text)
@@ -86,37 +84,42 @@ class DeobfuscationEngine:
 
                 for decoder in DECODERS:
                     try:
-                        decoded = decoder(cand.code)
+                        results = decoder(cand.code)
                     except Exception:
                         continue
 
-                    if not decoded or decoded == cand.code:
-                        continue
+                    # backward compatibility: decoder may return str
+                    if isinstance(results, str):
+                        results = [results]
 
-                    if decoded in visited:
-                        continue
+                    for decoded in results:
+                        if not decoded or decoded == cand.code:
+                            continue
 
-                    if printable_ratio(decoded) < 0.6:
-                        continue
+                        if decoded in visited:
+                            continue
 
-                    score = self._score(decoded)
+                        if printable_ratio(decoded) < 0.6:
+                            continue
 
-                    new_cand = Candidate(
-                        score=score,
-                        code=decoded,
-                        path=cand.path + [decoder.__name__],
-                        depth=cand.depth + 1
-                    )
+                        score = self._score(decoded)
 
-                    next_frontier.append(new_cand)
+                        new_cand = Candidate(
+                            score=score,
+                            code=decoded,
+                            path=cand.path + [decoder.__name__],
+                            depth=cand.depth + 1
+                        )
 
-                    if score > best.score:
-                        best = new_cand
+                        next_frontier.append(new_cand)
+
+                        if score > best.score:
+                            best = new_cand
 
             if not next_frontier:
                 break
 
-            # beam search — оставляем лучшие варианты
+            # beam search: keep best candidates
             next_frontier.sort(reverse=True)
             frontier = next_frontier[: self.beam_width]
 

@@ -1,5 +1,6 @@
 import string
-from typing import Optional
+from typing import List, Tuple
+
 
 _PRINTABLE = set(string.printable)
 
@@ -45,15 +46,15 @@ def _looks_like_code(s: str) -> bool:
     return any(k in low for k in keywords)
 
 
-def decode_rot(text: str) -> str:
+def decode_rot(text: str, max_candidates: int = 5) -> List[str]:
     """
-    Пробует ROT‑1 … ROT‑25 и ROT47.
-    Возвращает лучший результат по score.
+    ROT multi‑candidate decoder.
+    Пробует ROT‑1..ROT‑25 и ROT47.
+    Возвращает TOP‑N кандидатов.
     """
-    best: Optional[str] = None
-    best_score = 0.0
+    candidates: List[Tuple[str, float]] = []
 
-    # ROT‑N (1–25)
+    # ROT‑N
     for shift in range(1, 26):
         decoded = _rot_alpha(text, shift)
 
@@ -65,17 +66,19 @@ def decode_rot(text: str) -> str:
             continue
 
         score = pr
-        if score > best_score:
-            best = decoded
-            best_score = score
+        candidates.append((decoded, score))
 
     # ROT47
     decoded47 = _rot47(text)
     pr47 = _printable_ratio(decoded47)
 
     if pr47 >= 0.85 and _looks_like_code(decoded47):
-        if pr47 > best_score:
-            best = decoded47
-            best_score = pr47
+        candidates.append((decoded47, pr47))
 
-    return best if best else text
+    if not candidates:
+        return []
+
+    # сортировка по score
+    candidates.sort(key=lambda x: x[1], reverse=True)
+
+    return [c[0] for c in candidates[:max_candidates]]

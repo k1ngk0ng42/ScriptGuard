@@ -1,27 +1,17 @@
 import string
-import base64
-from typing import List, Dict, Tuple, Optional
+from typing import List
+
 
 _PRINTABLE = set(string.printable)
 
-# ключевой candidate для engine
+
 class XORCandidate:
+    __slots__ = ("code", "key", "score")
+
     def __init__(self, code: str, key: int, score: float):
         self.code = code
         self.key = key
         self.score = score
-
-
-def _looks_like_code(s: str) -> bool:
-    """Эвристика: содержит подозрительные ключевые слова"""
-    keywords = [
-        "http", "https", "powershell", "invoke",
-        "function", "var ", "let ", "const ",
-        "cmd.exe", "wscript", "createobject",
-        "sub ", "dim ", "new-object", "eval(", "window"
-    ]
-    low = s.lower()
-    return any(k in low for k in keywords)
 
 
 def _printable_ratio(s: str) -> float:
@@ -30,49 +20,49 @@ def _printable_ratio(s: str) -> float:
     return sum(c in _PRINTABLE for c in s) / len(s)
 
 
-def decode_xor(text: str, max_candidates: int = 3) -> str:
+def _looks_like_code(s: str) -> bool:
+    keywords = (
+        "http", "https", "powershell", "invoke",
+        "function", "var ", "let ", "const ",
+        "cmd.exe", "wscript", "createobject",
+        "sub ", "dim ", "new-object", "eval("
+    )
+    low = s.lower()
+    return any(k in low for k in keywords)
+
+
+def decode_xor(text: str, max_candidates: int = 5) -> List[str]:
     """
-    Попытка XOR-декодирования текста.
-    Поддерживает single-byte и rolling XOR.
-    Возвращает лучший результат для engine.
+    XOR single‑byte brute‑force.
+    Возвращает TOP‑N кандидатов для engine.
     """
-    best_candidate: Optional[XORCandidate] = None
+    if len(text) < 20:
+        return []
+
+    candidates: List[XORCandidate] = []
 
     data = text.encode(errors="ignore")
 
     for key in range(1, 256):
         try:
-            # single-byte XOR
             decoded_bytes = bytes(b ^ key for b in data)
             decoded = decoded_bytes.decode(errors="ignore")
         except Exception:
             continue
 
-        if _printable_ratio(decoded) < 0.85:
+        pr = _printable_ratio(decoded)
+        if pr < 0.85:
             continue
+
         if not _looks_like_code(decoded):
             continue
 
-        score = _printable_ratio(decoded)
-        if best_candidate is None or score > best_candidate.score:
-            best_candidate = XORCandidate(decoded, key, score)
+        score = pr
+        candidates.append(XORCandidate(decoded, key, score))
 
-    # fallback: rolling XOR (key repeated over text)
-    if best_candidate is None and len(data) > 1:
-        for key in range(1, 256):
-            try:
-                decoded_bytes = bytes(data[i] ^ key for i in range(len(data)))
-                decoded = decoded_bytes.decode(errors="ignore")
-            except Exception:
-                continue
+    if not candidates:
+        return []
 
-            if _printable_ratio(decoded) < 0.85:
-                continue
-            if not _looks_like_code(decoded):
-                continue
+    candidates.sort(key=lambda c: c.score, reverse=True)
 
-            score = _printable_ratio(decoded)
-            if best_candidate is None or score > best_candidate.score:
-                best_candidate = XORCandidate(decoded, key, score)
-
-    return best_candidate.code if best_candidate else text
+    return [c.code for c in candidates[:max_candidates]]

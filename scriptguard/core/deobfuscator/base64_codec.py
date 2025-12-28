@@ -1,89 +1,99 @@
 import base64
+import binascii
 import gzip
+import io
 import re
-from typing import Optional
+from typing import List
 
 
-_BASE64_RE = re.compile(
-    r'(?:[A-Za-z0-9+/]{20,}={0,2})'
+BASE64_RE = re.compile(
+    r'(?<![A-Za-z0-9+/=])([A-Za-z0-9+/]{16,}={0,2})(?![A-Za-z0-9+/=])'
 )
 
 
-def _try_decode(blob: bytes) -> Optional[str]:
+def _try_decode(raw: bytes) -> List[str]:
     """
-    Пытается:
-    - utf‑8
-    - utf‑16le
-    - gzip → utf‑8 / utf‑16le
+    Пробует различные декодирования байтов → строк.
     """
-    # plain utf‑8
+    results = []
+
+    # utf‑8
     try:
-        return blob.decode("utf-8")
+        s = raw.decode("utf-8")
+        if _looks_ok(s):
+            results.append(s)
     except Exception:
         pass
 
-    # plain utf‑16le (PowerShell)
+    # utf‑16le
     try:
-        return blob.decode("utf-16le")
+        s = raw.decode("utf-16le")
+        if _looks_ok(s):
+            results.append(s)
     except Exception:
         pass
 
-    # gzip → utf‑8 / utf‑16le
+    # gzip
     try:
-        decompressed = gzip.decompress(blob)
-        try:
-            return decompressed.decode("utf-8")
-        except Exception:
-            return decompressed.decode("utf-16le", errors="ignore")
+        with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
+            data = gz.read()
+            try:
+                s = data.decode("utf-8")
+                if _looks_ok(s):
+                    results.append(s)
+            except Exception:
+                pass
     except Exception:
         pass
 
-    return None
+    return results
 
 
-def _looks_useful(s: str) -> bool:
-    """
-    Минимальная эвристика полезности.
-    """
-    if not s or len(s) < 10:
+def _looks_ok(s: str) -> bool:
+    if len(s) < 6:
         return False
-
-    low = s.lower()
-    return any(k in low for k in (
-        "http", "https", "powershell", "invoke",
-        "function", "cmd.exe", "wscript",
-        "createobject", "new-object", "eval("
-    ))
+    printable = sum(c.isprintable() for c in s)
+    return printable / len(s) > 0.85
 
 
-def decode_base64(text: str) -> str:
+def decode_base64(text: str) -> List[str]:
     """
-    Ищет base64 внутри текста, пытается декодировать,
-    выбирает лучший результат.
+    Base64 EXPAND decoder.
+
+    Возвращает:
+    - оригинальный текст
+    - текст с заменой base64
+    - чисто decoded payload
     """
-    best = text
-    best_len = 0
+    results = [text]
 
-    for match in _BASE64_RE.finditer(text):
-        b64 = match.group(0)
+    matches = set(BASE64_RE.findall(text))
+    if not matches:
+        return results
 
-        # padding fix
-        padded = b64 + "=" * ((4 - len(b64) % 4) % 4)
-
+    for b64 in matches:
         try:
-            raw = base64.b64decode(padded)
-        except Exception:
+            raw = base64.b64decode(b64, validate=True)
+        except binascii.Error:
             continue
 
-        decoded = _try_decode(raw)
-        if not decoded:
-            continue
+        decoded_variants = _try_decode(raw)
 
-        if not _looks_useful(decoded):
-            continue
+        for decoded in decoded_variants:
+            # 1️⃣ вариант: decoded как отдельный кандидат
+            results.append(decoded)
 
-        if len(decoded) > best_len:
-            best = text.replace(b64, decoded)
-            best_len = len(decoded)
+            # 2️⃣ вариант: replace внутри текста
+            replaced = text.replace(b64, decoded)
+            if replaced != text:
+                results.append(replaced)
 
-    return best
+    # уникализация + сохранение порядка
+    seen = set()
+    final = []
+    for r in results:
+        if r not in seen:
+            seen.add(r)
+            final.append(r)
+
+    return final
