@@ -1,3 +1,5 @@
+from dataclasses import dataclass, field
+from typing import Callable, List, Set
 import math
 
 from scriptguard.core.deobfuscator.base64_codec import decode_base64
@@ -7,7 +9,7 @@ from scriptguard.core.deobfuscator.vba_chr import decode_vba_chr
 from scriptguard.core.deobfuscator.xor_codec import decode_xor
 
 
-DECODERS = [
+DECODERS: List[Callable[[str], str]] = [
     decode_powershell,
     decode_vba_chr,
     decode_base64,
@@ -17,7 +19,6 @@ DECODERS = [
 
 
 def entropy(s: str) -> float:
-    """Shannon entropy"""
     if not s:
         return 0.0
     probs = [s.count(c) / len(s) for c in set(s)]
@@ -27,67 +28,106 @@ def entropy(s: str) -> float:
 def printable_ratio(s: str) -> float:
     if not s:
         return 0.0
-    return sum(c.isprintable() for c in s) / len(s)
+    printable = sum(c.isprintable() for c in s)
+    return printable / len(s)
+
+
+@dataclass(order=True)
+class Candidate:
+    score: float
+    code: str = field(compare=False)
+    path: List[str] = field(default_factory=list, compare=False)
+    depth: int = field(default=0, compare=False)
 
 
 class DeobfuscationEngine:
-    def __init__(self, max_iter: int = 10):
-        self.max_iter = max_iter
+    def __init__(self, max_depth: int = 8, beam_width: int = 4):
+        self.max_depth = max_depth
+        self.beam_width = beam_width
 
-    def _score(self, s: str) -> float:
+    def _score(self, text: str) -> float:
         """
-        Эвристическая оценка «качества» расшифровки
+        Composite heuristic score.
+        Чем выше — тем больше похоже на финальный payload.
         """
+        e = entropy(text)
+        p = printable_ratio(text)
+
+        entropy_score = 1.0 - min(e / 8.0, 1.0)
+        length_score = min(len(text) / 8000, 1.0)
+
         return (
-            (1.0 - min(entropy(s) / 8.0, 1.0)) * 0.5 +
-            printable_ratio(s) * 0.4 +
-            min(len(s) / 10000, 1.0) * 0.1
+            entropy_score * 0.5 +
+            p * 0.3 +
+            length_score * 0.2
         )
 
     def run(self, code: str) -> dict:
-        seen = set()
-        iterations = 0
-        confidence = 0.0
+        visited: Set[str] = set()
 
-        current = code
-        current_score = self._score(current)
+        initial = Candidate(
+            score=self._score(code),
+            code=code,
+            path=[],
+            depth=0
+        )
 
-        for _ in range(self.max_iter):
-            best = current
-            best_score = current_score
+        frontier: List[Candidate] = [initial]
+        best = initial
 
-            for decoder in DECODERS:
-                try:
-                    candidate = decoder(current)
-                except Exception:
+        for _ in range(self.max_depth):
+            next_frontier: List[Candidate] = []
+
+            for cand in frontier:
+                if cand.code in visited:
                     continue
 
-                if not candidate or candidate == current:
-                    continue
-                if candidate in seen:
-                    continue
+                visited.add(cand.code)
 
-                score = self._score(candidate)
+                for decoder in DECODERS:
+                    try:
+                        decoded = decoder(cand.code)
+                    except Exception:
+                        continue
 
-                if score > best_score:
-                    best = candidate
-                    best_score = score
+                    if not decoded or decoded == cand.code:
+                        continue
 
-            if best == current:
+                    if decoded in visited:
+                        continue
+
+                    if printable_ratio(decoded) < 0.6:
+                        continue
+
+                    score = self._score(decoded)
+
+                    new_cand = Candidate(
+                        score=score,
+                        code=decoded,
+                        path=cand.path + [decoder.__name__],
+                        depth=cand.depth + 1
+                    )
+
+                    next_frontier.append(new_cand)
+
+                    if score > best.score:
+                        best = new_cand
+
+            if not next_frontier:
                 break
 
-            seen.add(current)
-            current = best
-            current_score = best_score
-            iterations += 1
-            confidence += 0.15
+            # beam search — оставляем лучшие варианты
+            next_frontier.sort(reverse=True)
+            frontier = next_frontier[: self.beam_width]
 
-            # защита от деградации
-            if printable_ratio(current) < 0.6:
-                break
+        confidence = min(
+            1.0,
+            0.2 + best.depth * 0.15 + best.score * 0.4
+        )
 
         return {
-            "code": current,
-            "iterations": iterations,
-            "confidence": round(min(confidence, 1.0), 2),
+            "code": best.code,
+            "iterations": best.depth,
+            "confidence": round(confidence, 2),
+            "path": best.path,
         }
