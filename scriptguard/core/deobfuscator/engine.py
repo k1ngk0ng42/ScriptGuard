@@ -1,4 +1,5 @@
 import math
+import string
 from dataclasses import dataclass, field
 from typing import Callable, List, Set, Union
 
@@ -17,6 +18,8 @@ DECODERS: List[Callable[[str], Union[str, List[str]]]] = [
     decode_xor,
 ]
 
+_ASCII_PRINTABLE = set(string.printable)
+
 
 def entropy(s: str) -> float:
     if not s:
@@ -25,10 +28,56 @@ def entropy(s: str) -> float:
     return -sum(p * math.log2(p) for p in probs if p > 0)
 
 
-def printable_ratio(s: str) -> float:
+def ascii_printable_ratio(s: str) -> float:
+    """
+    Важно: НЕ используем str.isprintable(), потому что он считает печатными
+    множество unicode-символов (из-за этого выигрывают "кракозябры").
+    """
     if not s:
         return 0.0
-    return sum(c.isprintable() for c in s) / len(s)
+    return sum(c in _ASCII_PRINTABLE for c in s) / len(s)
+
+
+def unicode_ratio(s: str) -> float:
+    """
+    Доля символов вне ASCII-диапазона.
+    Для кода (PS/VBA/JS/HTML) обычно это почти 0.
+    """
+    if not s:
+        return 0.0
+    return sum(ord(c) > 127 for c in s) / len(s)
+
+
+def looks_like_script(s: str) -> float:
+    """
+    Небольшой бонус к score, если строка похожа на реальный скрипт/пейлоад.
+    Возвращает значение 0..1 (не слишком агрессивно).
+    """
+    low = s.lower()
+    hits = 0
+
+    keywords = (
+        # PowerShell
+        "powershell", "encodedcommand", "invoke-webrequest", "iwr ", "iex", "invoke-expression",
+        "new-object", "start-process", "downloadstring", "frombase64string",
+        # VBA / Office macro
+        "createobject", "wscript.shell", "shell(", "sub ", "function ", "dim ", "chr(", "chrb(",
+        # JS/HTML
+        "<script", "function(", "eval(", "atob(", "document.", "window.", "xmlhttprequest",
+        # generic
+        "http://", "https://", ".exe", ".dll", ".ps1", "cmd.exe", "rundll32"
+    )
+
+    for k in keywords:
+        if k in low:
+            hits += 1
+
+    # мягкая нормализация
+    if hits <= 0:
+        return 0.0
+    if hits >= 6:
+        return 1.0
+    return hits / 6.0
 
 
 @dataclass(order=True)
@@ -47,18 +96,40 @@ class DeobfuscationEngine:
     def _score(self, text: str) -> float:
         """
         Composite heuristic score.
+
+        Идея:
+        - низкая энтропия (ближе к "осмысленному") => плюс
+        - высокий ASCII printable ratio => плюс
+        - много Unicode (кракозябры) => штраф
+        - признаки реального скрипта => бонус
         """
+        if not text:
+            return 0.0
+
         e = entropy(text)
-        p = printable_ratio(text)
+        p = ascii_printable_ratio(text)
+        u = unicode_ratio(text)
+        k = looks_like_script(text)
 
+        # 0..1
         entropy_score = 1.0 - min(e / 8.0, 1.0)
-        length_score = min(len(text) / 8000, 1.0)
 
-        return (
-            entropy_score * 0.5 +
-            p * 0.3 +
-            length_score * 0.2
+        # длина: чтобы короткие "обрывки" не побеждали всегда,
+        # но и огромные простыни не давали мегабонус
+        length_score = min(len(text) / 6000, 1.0)
+
+        # штраф за unicode: уже при 5-10% заметно
+        unicode_penalty = min(u / 0.20, 1.0)  # 0..1
+
+        score = (
+            entropy_score * 0.40 +
+            p * 0.35 +
+            length_score * 0.10 +
+            k * 0.25 -
+            unicode_penalty * 0.35
         )
+
+        return score
 
     def run(self, code: str) -> dict:
         visited: Set[str] = set()
@@ -79,7 +150,6 @@ class DeobfuscationEngine:
             for cand in frontier:
                 if cand.code in visited:
                     continue
-
                 visited.add(cand.code)
 
                 for decoder in DECODERS:
@@ -88,18 +158,20 @@ class DeobfuscationEngine:
                     except Exception:
                         continue
 
-                    # backward compatibility: decoder may return str
                     if isinstance(results, str):
                         results = [results]
 
                     for decoded in results:
                         if not decoded or decoded == cand.code:
                             continue
-
                         if decoded in visited:
                             continue
 
-                        if printable_ratio(decoded) < 0.6:
+                        # фильтр: режем мусор жёстче, но не “убиваем” всё
+                        if ascii_printable_ratio(decoded) < 0.70:
+                            continue
+                        if unicode_ratio(decoded) > 0.10:
+                            # 10%+ non-ascii — почти всегда кракозябры/битые строки
                             continue
 
                         score = self._score(decoded)
@@ -110,7 +182,6 @@ class DeobfuscationEngine:
                             path=cand.path + [decoder.__name__],
                             depth=cand.depth + 1
                         )
-
                         next_frontier.append(new_cand)
 
                         if score > best.score:
@@ -119,9 +190,13 @@ class DeobfuscationEngine:
             if not next_frontier:
                 break
 
-            # beam search: keep best candidates
             next_frontier.sort(reverse=True)
             frontier = next_frontier[: self.beam_width]
+
+            # мягкий early stop:
+            # если нашли очень “похожий на скрипт” результат, дальше обычно только портит
+            if looks_like_script(best.code) >= 0.8 and best.depth >= 1:
+                break
 
         confidence = min(
             1.0,

